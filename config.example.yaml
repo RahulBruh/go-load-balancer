@@ -1,6 +1,10 @@
 # Address clients connect to.
 listen: ":8080"
 
+# Serves /metrics (Prometheus), /admin/status (JSON) and /healthz. Leave
+# empty to disable.
+admin_listen: ":9090"
+
 # round_robin | weighted_round_robin | least_connections
 # Weights (default 1) apply to weighted_round_robin and least_connections.
 strategy: round_robin

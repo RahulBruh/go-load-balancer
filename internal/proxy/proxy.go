@@ -34,7 +34,25 @@ type Options struct {
 	// http.DefaultTransport.
 	Transport http.RoundTripper
 	Logger    *slog.Logger
+	// Observer, if set, is told about every upstream attempt.
+	Observer Observer
 }
+
+// Observer receives the outcome of each upstream attempt; metrics.Registry
+// implements it.
+type Observer interface {
+	UpstreamResponse(b *backend.Backend, code int)
+	UpstreamError(b *backend.Backend)
+	Retry()
+	StateChange(b *backend.Backend, alive bool)
+}
+
+type nopObserver struct{}
+
+func (nopObserver) UpstreamResponse(*backend.Backend, int) {}
+func (nopObserver) UpstreamError(*backend.Backend)         {}
+func (nopObserver) Retry()                                 {}
+func (nopObserver) StateChange(*backend.Backend, bool)     {}
 
 type Proxy struct {
 	backends []*backend.Backend
@@ -58,6 +76,9 @@ func New(backends []*backend.Backend, strategy balancer.Strategy, opts Options) 
 	}
 	if p.log == nil {
 		p.log = slog.Default()
+	}
+	if p.opts.Observer == nil {
+		p.opts.Observer = nopObserver{}
 	}
 	p.rp = &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -110,10 +131,16 @@ func (p *Proxy) roundTrip(req *http.Request) (*http.Response, error) {
 			lastResp = nil
 		}
 		if attempt > 0 {
+			p.opts.Observer.Retry()
 			p.log.Debug("retrying on another backend", "backend", b.Name(), "attempt", attempt+1)
 		}
 
 		resp, err := p.send(req, b)
+		if err != nil {
+			p.opts.Observer.UpstreamError(b)
+		} else {
+			p.opts.Observer.UpstreamResponse(b, resp.StatusCode)
+		}
 		if req.Context().Err() != nil {
 			// The client gave up; that says nothing about the backend.
 			return resp, err
@@ -148,6 +175,7 @@ func (p *Proxy) passiveFailure(b *backend.Backend, resp *http.Response, err erro
 			attrs = append(attrs, "status", resp.StatusCode)
 		}
 		p.log.Warn("backend down", attrs...)
+		p.opts.Observer.StateChange(b, false)
 	}
 }
 

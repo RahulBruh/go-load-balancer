@@ -18,6 +18,7 @@ import (
 	"github.com/RahulBruh/go-load-balancer/internal/balancer"
 	"github.com/RahulBruh/go-load-balancer/internal/config"
 	"github.com/RahulBruh/go-load-balancer/internal/health"
+	"github.com/RahulBruh/go-load-balancer/internal/metrics"
 	"github.com/RahulBruh/go-load-balancer/internal/proxy"
 )
 
@@ -48,11 +49,13 @@ func run(configPath string, log *slog.Logger) error {
 		return err
 	}
 
+	reg := metrics.New(cfg.Strategy, backends)
 	p := proxy.New(backends, strategy, proxy.Options{
 		Retries:         cfg.Retries,
 		PassiveMaxFails: cfg.Passive.MaxFails,
 		Transport:       newTransport(cfg.Timeouts),
 		Logger:          log,
+		Observer:        reg,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -68,6 +71,7 @@ func run(configPath string, log *slog.Logger) error {
 		Fall:     hc.Fall,
 		Client:   &http.Client{Transport: newTransport(cfg.Timeouts)},
 		Logger:   log,
+		OnChange: reg.StateChange,
 	}
 	// Probe once before accepting traffic so a backend that is already down
 	// never receives a request; Fall is bypassed for this first round.
@@ -78,14 +82,25 @@ func run(configPath string, log *slog.Logger) error {
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           p,
+		Handler:           reg.Middleware(p),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	errc := make(chan error, 1)
+	servers := []*http.Server{srv}
+	errc := make(chan error, 2)
 	go func() {
 		log.Info("load balancer listening", "addr", cfg.Listen, "strategy", cfg.Strategy, "backends", len(backends))
 		errc <- srv.ListenAndServe()
 	}()
+	// Metrics and status live on their own listener so they can't collide
+	// with proxied paths and can be kept off the public interface.
+	if cfg.AdminListen != "" {
+		admin := &http.Server{Addr: cfg.AdminListen, Handler: reg.Handler(), ReadHeaderTimeout: 10 * time.Second}
+		servers = append(servers, admin)
+		go func() {
+			log.Info("admin listening", "addr", cfg.AdminListen, "endpoints", "/metrics /admin/status /healthz")
+			errc <- admin.ListenAndServe()
+		}()
+	}
 
 	select {
 	case err := <-errc:
@@ -95,8 +110,10 @@ func run(configPath string, log *slog.Logger) error {
 	log.Info("shutting down, draining in-flight requests")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
+	for _, s := range servers {
+		if err := s.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
 	}
 	return nil
 }
