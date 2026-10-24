@@ -1,0 +1,1 @@
+{"scenario":"passive-retries","retries":2,"passive_max_fails":3,"detect_ms":18,"down_reason":"passive"}

@@ -1,0 +1,1 @@
+{"url":"http://localhost:9101/","concurrency":50,"seconds":10.00244553,"requests":231827,"rps":23177.031987296414,"p50_ms":1.843,"p90_ms":3.32,"p99_ms":5.919,"max_ms":17.934,"codes":{"200":231827},"failures":0}
