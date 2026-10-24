@@ -1,0 +1,14 @@
+# Address clients connect to.
+listen: ":8080"
+
+# round_robin | weighted_round_robin | least_connections
+strategy: round_robin
+
+backends:
+  - url: http://localhost:9001
+  - url: http://localhost:9002
+  - url: http://localhost:9003
+
+timeouts:
+  dial: 2s
+  response_header: 10s
