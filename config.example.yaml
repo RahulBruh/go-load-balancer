@@ -9,6 +9,15 @@ backends:
   - url: http://localhost:9002
   - url: http://localhost:9003
 
+# Passive checks: consecutive failed proxied requests (connection errors or
+# 502/503/504) that take a backend out before the next active check. 0 = off.
+passive:
+  max_fails: 3
+
+# Idempotent requests without a body are retried on up to this many other
+# backends after a connection error or a 502/503/504.
+retries: 2
+
 timeouts:
   dial: 2s
   response_header: 10s

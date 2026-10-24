@@ -24,6 +24,12 @@ var ErrNoHealthyBackend = errors.New("no healthy backend")
 const UpstreamHeader = "X-Upstream"
 
 type Options struct {
+	// Retries is how many other backends an idempotent request may be retried
+	// on after a connection error or a 502/503/504.
+	Retries int
+	// PassiveMaxFails is how many consecutive failed requests take a backend
+	// out of rotation. 0 disables passive health checks.
+	PassiveMaxFails int
 	// Transport performs the actual upstream round trip. Defaults to
 	// http.DefaultTransport.
 	Transport http.RoundTripper
@@ -33,6 +39,7 @@ type Options struct {
 type Proxy struct {
 	backends []*backend.Backend
 	strategy balancer.Strategy
+	opts     Options
 	base     http.RoundTripper
 	log      *slog.Logger
 	rp       *httputil.ReverseProxy
@@ -42,6 +49,7 @@ func New(backends []*backend.Backend, strategy balancer.Strategy, opts Options) 
 	p := &Proxy{
 		backends: backends,
 		strategy: strategy,
+		opts:     opts,
 		base:     opts.Transport,
 		log:      opts.Logger,
 	}
@@ -74,12 +82,96 @@ func (rt roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	return rt.p.roundTrip(req)
 }
 
+// roundTrip sends the request to a backend chosen by the strategy. A request
+// that is safe to replay is retried on a different backend when the attempt
+// fails at the connection level or the backend answers 502, 503 or 504, up to
+// Options.Retries times. Every failure also counts toward that backend's
+// passive health threshold.
 func (p *Proxy) roundTrip(req *http.Request) (*http.Response, error) {
-	b := p.strategy.Next(backend.Filter(p.backends, (*backend.Backend).Alive))
-	if b == nil {
-		return nil, ErrNoHealthyBackend
+	attempts := 1
+	if canRetry(req) {
+		attempts += p.opts.Retries
 	}
-	return p.send(req, b)
+	tried := make(map[*backend.Backend]bool, attempts)
+	var (
+		lastResp *http.Response
+		lastErr  error
+	)
+	for attempt := 0; attempt < attempts; attempt++ {
+		b := p.strategy.Next(backend.Filter(p.backends, func(b *backend.Backend) bool {
+			return b.Alive() && !tried[b]
+		}))
+		if b == nil {
+			break
+		}
+		tried[b] = true
+		if lastResp != nil {
+			discard(lastResp)
+			lastResp = nil
+		}
+		if attempt > 0 {
+			p.log.Debug("retrying on another backend", "backend", b.Name(), "attempt", attempt+1)
+		}
+
+		resp, err := p.send(req, b)
+		if req.Context().Err() != nil {
+			// The client gave up; that says nothing about the backend.
+			return resp, err
+		}
+		if err == nil && !failedStatus(resp.StatusCode) {
+			if p.opts.PassiveMaxFails > 0 {
+				b.ResetFailures()
+			}
+			return resp, nil
+		}
+		p.passiveFailure(b, resp, err)
+		lastResp, lastErr = resp, err
+	}
+	if lastResp != nil {
+		return lastResp, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, ErrNoHealthyBackend
+}
+
+func (p *Proxy) passiveFailure(b *backend.Backend, resp *http.Response, err error) {
+	if p.opts.PassiveMaxFails == 0 {
+		return
+	}
+	if b.RecordFailure(p.opts.PassiveMaxFails) {
+		attrs := []any{"backend", b.Name(), "reason", "passive"}
+		if err != nil {
+			attrs = append(attrs, "err", err)
+		} else {
+			attrs = append(attrs, "status", resp.StatusCode)
+		}
+		p.log.Warn("backend down", attrs...)
+	}
+}
+
+// canRetry reports whether replaying req on another backend is safe: the
+// method must be idempotent and there must be no body to re-send.
+func canRetry(req *http.Request) bool {
+	switch req.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace, http.MethodPut, http.MethodDelete:
+	default:
+		return false
+	}
+	return req.Body == nil || req.Body == http.NoBody
+}
+
+// failedStatus is true for statuses that mean the backend (or something in
+// front of it) could not handle the request, as opposed to an application
+// error like 500 that another backend would most likely repeat.
+func failedStatus(code int) bool {
+	return code == http.StatusBadGateway || code == http.StatusServiceUnavailable || code == http.StatusGatewayTimeout
+}
+
+func discard(resp *http.Response) {
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	resp.Body.Close()
 }
 
 // send forwards one attempt to b. The backend's in-flight count stays raised
