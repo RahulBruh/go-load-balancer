@@ -26,3 +26,30 @@ jobs:
         with:
           version: latest
           install-go: false
+
+  compose-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: start stack
+        run: docker compose up --build -d
+      - name: traffic rotates across all backends
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf --retry 10 --retry-connrefused --retry-delay 1 localhost:8080/ ; sleep 0.1
+          done | sort | uniq -c | tee counts.txt
+          test "$(wc -l < counts.txt)" -eq 3
+      - name: stopping a backend causes no client errors
+        run: |
+          docker compose stop backend2
+          fails=0
+          for i in $(seq 1 60); do
+            curl -sf -o /dev/null localhost:8080/ || fails=$((fails+1)); sleep 0.05
+          done
+          echo "client errors after stopping backend2: $fails"
+          curl -s localhost:9090/admin/status
+          test "$fails" -eq 0
+          curl -s localhost:9090/metrics | grep -q 'lb_backend_up{backend="backend2:8080"} 0'
+      - name: logs
+        if: always()
+        run: docker compose logs lb

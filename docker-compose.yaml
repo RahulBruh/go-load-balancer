@@ -1,0 +1,29 @@
+# docker compose up --build
+#   curl localhost:8080/                  -> rotates across backend1..3
+#   curl localhost:9090/admin/status      -> backend state
+#   docker compose stop backend2          -> drops out of rotation, no client errors
+x-backend: &backend
+  build: .
+  image: go-load-balancer
+  entrypoint: ["/usr/local/bin/demo-backend"]
+
+services:
+  lb:
+    build: .
+    image: go-load-balancer
+    volumes:
+      - ./deploy/config.yaml:/etc/lb/config.yaml:ro
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    depends_on: [backend1, backend2, backend3]
+
+  backend1:
+    <<: *backend
+    command: ["-addr", ":8080", "-name", "backend1"]
+  backend2:
+    <<: *backend
+    command: ["-addr", ":8080", "-name", "backend2"]
+  backend3:
+    <<: *backend
+    command: ["-addr", ":8080", "-name", "backend3"]
