@@ -49,8 +49,10 @@ func run(configPath string, log *slog.Logger) error {
 	}
 
 	p := proxy.New(backends, strategy, proxy.Options{
-		Transport: newTransport(cfg.Timeouts),
-		Logger:    log,
+		Retries:         cfg.Retries,
+		PassiveMaxFails: cfg.Passive.MaxFails,
+		Transport:       newTransport(cfg.Timeouts),
+		Logger:          log,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

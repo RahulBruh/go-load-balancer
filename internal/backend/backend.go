@@ -77,6 +77,16 @@ func (b *Backend) RecordFailure(fall int) (changed bool) {
 	return false
 }
 
+// ResetFailures clears the failure streak after a successful proxied request.
+// Unlike RecordSuccess it never brings a backend back: only the active checker
+// does that, so requests still finishing on a just-removed backend can't
+// restore it.
+func (b *Backend) ResetFailures() {
+	b.mu.Lock()
+	b.consecFail = 0
+	b.mu.Unlock()
+}
+
 // Filter returns the backends for which keep returns true.
 func Filter(bs []*Backend, keep func(*Backend) bool) []*Backend {
 	out := make([]*Backend, 0, len(bs))
