@@ -17,6 +17,7 @@ import (
 	"github.com/RahulBruh/go-load-balancer/internal/backend"
 	"github.com/RahulBruh/go-load-balancer/internal/balancer"
 	"github.com/RahulBruh/go-load-balancer/internal/config"
+	"github.com/RahulBruh/go-load-balancer/internal/health"
 	"github.com/RahulBruh/go-load-balancer/internal/proxy"
 )
 
@@ -54,6 +55,24 @@ func run(configPath string, log *slog.Logger) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	hc := cfg.HealthCheck
+	checker := &health.Checker{
+		Backends: backends,
+		Path:     hc.Path,
+		Interval: hc.Interval,
+		Timeout:  hc.Timeout,
+		Rise:     hc.Rise,
+		Fall:     hc.Fall,
+		Client:   &http.Client{Transport: newTransport(cfg.Timeouts)},
+		Logger:   log,
+	}
+	// Probe once before accepting traffic so a backend that is already down
+	// never receives a request; Fall is bypassed for this first round.
+	initial := *checker
+	initial.Fall = 1
+	initial.CheckAll(ctx)
+	go checker.Run(ctx)
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,

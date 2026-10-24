@@ -12,3 +12,12 @@ backends:
 timeouts:
   dial: 2s
   response_header: 10s
+
+# Active checks: GET <backend><path> every interval. A backend leaves rotation
+# after `fall` consecutive failures and returns after `rise` consecutive passes.
+health_check:
+  path: /health
+  interval: 2s
+  timeout: 1s
+  rise: 2
+  fall: 3
