@@ -1,0 +1,17 @@
+# Config for docker-compose.yaml: the balancer in front of three demo backends.
+listen: ":8080"
+admin_listen: ":9090"
+strategy: round_robin
+backends:
+  - url: http://backend1:8080
+  - url: http://backend2:8080
+  - url: http://backend3:8080
+health_check:
+  path: /health
+  interval: 1s
+  timeout: 500ms
+  rise: 2
+  fall: 2
+passive:
+  max_fails: 3
+retries: 2
