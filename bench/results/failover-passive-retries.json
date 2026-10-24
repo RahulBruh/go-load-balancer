@@ -1,0 +1,1 @@
+{"url":"http://localhost:8180/","concurrency":20,"seconds":12.003355426,"requests":41495,"rps":3456.950038330057,"p50_ms":5.229,"p90_ms":9.041,"p99_ms":14.68,"max_ms":40.614,"codes":{"200":41495},"failures":0,"timeline":[0,0,0,0,0,0,0,0,0,0,0,0,0]}
